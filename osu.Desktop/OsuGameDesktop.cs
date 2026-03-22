@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Diagnostics;
@@ -113,18 +114,33 @@ namespace osu.Desktop
 
             string[] args = Environment.GetCommandLineArgs();
 
+            // Find and remove the restart marker argument and its value
+            int restartMarkerIndex = Array.IndexOf(args, Program.restart_after_pid_argument);
+
+            if (restartMarkerIndex >= 0)
+            {
+                var filteredArgs = new List<string>(args.Length);
+
+                for (int i = 0; i < args.Length; i++)
+                {
+                    if (i == restartMarkerIndex)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    filteredArgs.Add(args[i]);
+                }
+
+                args = filteredArgs.ToArray();
+            }
+
             var startInfo = new ProcessStartInfo
             {
-                FileName = "/bin/sh",
+                FileName = executable,
                 UseShellExecute = false,
                 WorkingDirectory = Environment.CurrentDirectory,
             };
-
-            startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add("pid=\"$1\"; shift; while kill -0 \"$pid\" 2>/dev/null; do sleep 0.1; done; exec \"$@\"");
-            startInfo.ArgumentList.Add("sh");
-            startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
-            startInfo.ArgumentList.Add(executable);
 
             if (args.Length > 0)
             {
@@ -138,9 +154,11 @@ namespace osu.Desktop
                     startInfo.ArgumentList.Add(args[i]);
             }
 
+            startInfo.ArgumentList.Add(Program.restart_after_pid_argument);
+            startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+
             Process.Start(startInfo);
         }
-
 
         protected override UpdateManager CreateUpdateManager()
         {
