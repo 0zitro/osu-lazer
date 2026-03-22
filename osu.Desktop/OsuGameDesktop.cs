@@ -126,8 +126,17 @@ namespace osu.Desktop
             startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
             startInfo.ArgumentList.Add(executable);
 
-            for (int i = 1; i < args.Length; i++)
-                startInfo.ArgumentList.Add(args[i]);
+            if (args.Length > 0)
+            {
+                string firstArg = Path.GetFullPath(args[0]);
+                string processPath = Path.GetFullPath(executable);
+
+                if (!string.Equals(firstArg, processPath, StringComparison.Ordinal))
+                    startInfo.ArgumentList.Add(args[0]);
+
+                for (int i = 1; i < args.Length; i++)
+                    startInfo.ArgumentList.Add(args[i]);
+            }
 
             Process.Start(startInfo);
         }
