@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 using osu.Desktop.Performance;
@@ -103,6 +104,35 @@ namespace osu.Desktop
 
         public static bool IsPackageManaged => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OSU_EXTERNAL_UPDATE_PROVIDER"));
 
+        private static void restartPackageManagedProcessWhenCurrentExits()
+        {
+            string? executable = Environment.ProcessPath;
+
+            if (string.IsNullOrEmpty(executable))
+                throw new InvalidOperationException("Could not determine current process path for restart.");
+
+            string[] args = Environment.GetCommandLineArgs();
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "/bin/sh",
+                UseShellExecute = false,
+                WorkingDirectory = Environment.CurrentDirectory,
+            };
+
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("pid=\"$1\"; shift; while kill -0 \"$pid\" 2>/dev/null; do sleep 0.1; done; exec \"$@\"");
+            startInfo.ArgumentList.Add("sh");
+            startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+            startInfo.ArgumentList.Add(executable);
+
+            for (int i = 1; i < args.Length; i++)
+                startInfo.ArgumentList.Add(args[i]);
+
+            Process.Start(startInfo);
+        }
+
+
         protected override UpdateManager CreateUpdateManager()
         {
             // If this is the first time we've run the game, ie it is being installed,
@@ -121,7 +151,22 @@ namespace osu.Desktop
 
         public override bool RestartAppWhenExited()
         {
-            RestartOnExitAction = () => Velopack.UpdateExe.Start(waitPid: (uint)Environment.ProcessId);
+            RestartOnExitAction = () =>
+            {
+                if (IsPackageManaged)
+                {
+                    try
+                    {
+                        restartPackageManagedProcessWhenCurrentExits();
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.Log($"Failed to restart package-managed installation: {e}", LoggingTarget.Runtime, LogLevel.Important);
+                    }
+                    return;
+                }
+                Velopack.UpdateExe.Start(waitPid: (uint)Environment.ProcessId);
+            };
             return true;
         }
 
