@@ -2,8 +2,10 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 using osu.Desktop.Performance;
@@ -103,6 +105,61 @@ namespace osu.Desktop
 
         public static bool IsPackageManaged => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OSU_EXTERNAL_UPDATE_PROVIDER"));
 
+        private static void restartPackageManagedProcessWhenCurrentExits()
+        {
+            string? executable = Environment.ProcessPath;
+
+            if (string.IsNullOrEmpty(executable))
+                throw new InvalidOperationException("Could not determine current process path for restart.");
+
+            string[] args = Environment.GetCommandLineArgs();
+
+            // Find and remove the restart marker argument and its value
+            int restartMarkerIndex = Array.IndexOf(args, Program.restart_after_pid_argument);
+
+            if (restartMarkerIndex >= 0)
+            {
+                var filteredArgs = new List<string>(args.Length);
+
+                for (int i = 0; i < args.Length; i++)
+                {
+                    if (i == restartMarkerIndex)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    filteredArgs.Add(args[i]);
+                }
+
+                args = filteredArgs.ToArray();
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                WorkingDirectory = Environment.CurrentDirectory,
+            };
+
+            if (args.Length > 0)
+            {
+                string firstArg = Path.GetFullPath(args[0]);
+                string processPath = Path.GetFullPath(executable);
+
+                if (!string.Equals(firstArg, processPath, StringComparison.Ordinal))
+                    startInfo.ArgumentList.Add(args[0]);
+
+                for (int i = 1; i < args.Length; i++)
+                    startInfo.ArgumentList.Add(args[i]);
+            }
+
+            startInfo.ArgumentList.Add(Program.restart_after_pid_argument);
+            startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+
+            Process.Start(startInfo);
+        }
+
         protected override UpdateManager CreateUpdateManager()
         {
             // If this is the first time we've run the game, ie it is being installed,
@@ -121,7 +178,22 @@ namespace osu.Desktop
 
         public override bool RestartAppWhenExited()
         {
-            RestartOnExitAction = () => Velopack.UpdateExe.Start(waitPid: (uint)Environment.ProcessId);
+            RestartOnExitAction = () =>
+            {
+                if (IsPackageManaged)
+                {
+                    try
+                    {
+                        restartPackageManagedProcessWhenCurrentExits();
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.Log($"Failed to restart package-managed installation: {e}", LoggingTarget.Runtime, LogLevel.Important);
+                    }
+                    return;
+                }
+                Velopack.UpdateExe.Start(waitPid: (uint)Environment.ProcessId);
+            };
             return true;
         }
 

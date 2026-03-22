@@ -2,6 +2,8 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.Versioning;
 using osu.Desktop.LegacyIpc;
@@ -26,6 +28,8 @@ namespace osu.Desktop
         private const string base_game_name = @"osu";
 #endif
 
+        internal const string restart_after_pid_argument = "--restart-after-pid";
+
         private static LegacyTcpIpcProvider? legacyIpc;
 
         private static bool isFirstRun;
@@ -33,7 +37,10 @@ namespace osu.Desktop
         [STAThread]
         public static void Main(string[] args)
         {
+            args = consumeRestartAfterPidArgument(args);
+
             // IMPORTANT DON'T IGNORE: For general sanity, velopack's setup needs to run before anything else.
+            // The only exception is the restart hand-off above, which must happen first to avoid startup races.
             // This has bitten us in the rear before (bricked updater), and although the underlying issue from
             // last time has been fixed, let's not tempt fate.
             setupVelopack(args);
@@ -172,6 +179,53 @@ namespace osu.Desktop
             }
 
             return false;
+        }
+
+        private static string[] consumeRestartAfterPidArgument(string[] args)
+        {
+            int restartMarkerIndex = Array.IndexOf(args, restart_after_pid_argument);
+
+            if (restartMarkerIndex < 0)
+                return args;
+
+            var filteredArgs = new List<string>(args.Length);
+            string? pidString = null;
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (i == restartMarkerIndex)
+                {
+                    if (i + 1 < args.Length)
+                        pidString = args[i + 1];
+
+                    i++;
+                    continue;
+                }
+
+                filteredArgs.Add(args[i]);
+            }
+
+            if (!int.TryParse(pidString, out int pid) || pid <= 0)
+            {
+                Logger.Log($"Invalid or missing value for internal restart argument '{restart_after_pid_argument}'. Continuing startup.", LoggingTarget.Runtime, LogLevel.Important);
+                return filteredArgs.ToArray();
+            }
+
+            try
+            {
+                Logger.Log($"Waiting for process {pid} to exit before continuing startup.", LoggingTarget.Runtime, LogLevel.Important);
+                Process.GetProcessById(pid).WaitForExit();
+            }
+            catch (ArgumentException)
+            {
+                // Target process has likely already exited.
+            }
+            catch (InvalidOperationException)
+            {
+                // Target process has no associated process, likely because it already exited.
+            }
+
+            return filteredArgs.ToArray();
         }
 
         private static void setupVelopack(string[] args)
