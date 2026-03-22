@@ -215,6 +215,11 @@ namespace osu.Game.Localisation
         public static LocalisableString Difficulty => new TranslatableString(getKey(@"difficulty"), @"Difficulty");
 
         /// <summary>
+        /// "Difficulty (Recalculated)"
+        /// </summary>
+        public static LocalisableString RecalculatedDifficulty => new TranslatableString(getKey(@"difficulty_recalculated"), @"Difficulty (Recalculated)");
+
+        /// <summary>
         /// "Length"
         /// </summary>
         public static LocalisableString Length => new TranslatableString(getKey(@"length"), @"Length");

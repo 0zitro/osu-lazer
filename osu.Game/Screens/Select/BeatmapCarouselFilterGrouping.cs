@@ -152,7 +152,7 @@ namespace osu.Game.Screens.Select
         {
             // In certain cases, we intentionally split out difficulties
             // where it's more relevant or convenient to view them as individual items.
-            if (criteria.Sort == SortMode.Difficulty || criteria.Group == GroupMode.Difficulty)
+            if ((criteria.Sort == SortMode.Difficulty || criteria.Sort == SortMode.RecalculatedDifficulty) || criteria.Group == GroupMode.Difficulty)
                 return false;
             if (criteria.Sort == SortMode.LastPlayed && criteria.Group == GroupMode.LastPlayed)
                 return false;

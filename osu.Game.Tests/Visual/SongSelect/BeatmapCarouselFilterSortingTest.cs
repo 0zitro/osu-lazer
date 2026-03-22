@@ -10,6 +10,8 @@ using NUnit.Framework;
 using osu.Framework.Extensions.IEnumerableExtensions;
 using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
+using osu.Game.Rulesets;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Screens.Select;
 using osu.Game.Screens.Select.Filter;
 using osu.Game.Tests.Resources;
@@ -169,11 +171,58 @@ namespace osu.Game.Tests.Visual.SongSelect
             Assert.That(results.Select(b => b.BeatmapSet!.DateAdded), Is.Ordered.Descending);
         }
 
-        private static async Task<IEnumerable<BeatmapInfo>> runSorting(SortMode sort, List<BeatmapSetInfo> beatmapSets)
+        [Test]
+        public async Task TestSortingByRecalculatedDifficulty()
         {
-            var sorter = new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort });
+            var setA = TestResources.CreateTestBeatmapSetInfo(1);
+            var setB = TestResources.CreateTestBeatmapSetInfo(1);
+
+            var beatmapA = setA.Beatmaps.First();
+            var beatmapB = setB.Beatmaps.First();
+
+            // Static star ratings intentionally conflict with recalculated stars to validate the new mode's behaviour.
+            beatmapA.StarRating = 8;
+            beatmapB.StarRating = 2;
+
+            var difficultyCache = new TestBeatmapDifficultyCache(new Dictionary<BeatmapInfo, double>
+            {
+                [beatmapA] = 1,
+                [beatmapB] = 9,
+            });
+
+            var results = (await runSorting(SortMode.RecalculatedDifficulty, new List<BeatmapSetInfo> { setA, setB }, difficultyCache)).ToList();
+
+            Assert.That(results.First(), Is.EqualTo(beatmapA));
+            Assert.That(results.Last(), Is.EqualTo(beatmapB));
+        }
+
+        private static async Task<IEnumerable<BeatmapInfo>> runSorting(SortMode sort, List<BeatmapSetInfo> beatmapSets, BeatmapDifficultyCache? difficultyCache = null)
+        {
+            var sorter = difficultyCache != null
+                ? new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort }, () => difficultyCache)
+                : new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort });
+
             var carouselItems = await sorter.Run(beatmapSets.SelectMany(s => s.Beatmaps.Select(b => new CarouselItem(b))), CancellationToken.None);
             return carouselItems.Select(ci => ci.Model).OfType<BeatmapInfo>();
+        }
+
+        private partial class TestBeatmapDifficultyCache : BeatmapDifficultyCache
+        {
+            private readonly IReadOnlyDictionary<BeatmapInfo, double> starsByBeatmap;
+
+            public TestBeatmapDifficultyCache(IReadOnlyDictionary<BeatmapInfo, double> starsByBeatmap)
+            {
+                this.starsByBeatmap = starsByBeatmap;
+            }
+
+            public override Task<StarDifficulty?> GetDifficultyAsync(IBeatmapInfo beatmapInfo, IRulesetInfo? rulesetInfo = null, IEnumerable<Mod>? mods = null,
+                                                                      CancellationToken cancellationToken = default, int computationDelay = 0)
+            {
+                if (beatmapInfo is BeatmapInfo beatmap && starsByBeatmap.TryGetValue(beatmap, out double stars))
+                    return Task.FromResult<StarDifficulty?>(new StarDifficulty(stars, 0));
+
+                return Task.FromResult<StarDifficulty?>(new StarDifficulty(beatmapInfo.StarRating, 0));
+            }
         }
     }
 }

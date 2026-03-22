@@ -2,10 +2,12 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using osu.Framework.Extensions;
 using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
 using osu.Game.Screens.Select.Filter;
@@ -18,10 +20,20 @@ namespace osu.Game.Screens.Select
         public int BeatmapItemsCount { get; private set; }
 
         private readonly Func<FilterCriteria> getCriteria;
+        private readonly Func<BeatmapDifficultyCache>? getDifficultyCache;
+        private readonly Action? requestResort;
 
-        public BeatmapCarouselFilterSorting(Func<FilterCriteria> getCriteria)
+        /// <summary>
+        /// In-flight lookups are tracked here to avoid duplicate expensive calculations.
+        /// Completed lookups are removed and resolved via <see cref="BeatmapDifficultyCache"/> caching.
+        /// </summary>
+        private readonly ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>> inFlightDifficultyLookups = new ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>>();
+
+        public BeatmapCarouselFilterSorting(Func<FilterCriteria> getCriteria, Func<BeatmapDifficultyCache>? getDifficultyCache = null, Action? requestResort = null)
         {
             this.getCriteria = getCriteria;
+            this.getDifficultyCache = getDifficultyCache;
+            this.requestResort = requestResort;
         }
 
         public async Task<List<CarouselItem>> Run(IEnumerable<CarouselItem> items, CancellationToken cancellationToken) => await Task.Run(() =>
@@ -29,6 +41,11 @@ namespace osu.Game.Screens.Select
             var criteria = getCriteria();
 
             bool groupedSets = BeatmapCarouselFilterGrouping.ShouldGroupBeatmapsTogether(criteria);
+
+            IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars = null;
+
+            if (criteria.Sort == SortMode.RecalculatedDifficulty)
+                recalculatedStars = createRecalculatedStarsMap(items, criteria);
 
             BeatmapItemsCount = items.Count();
 
@@ -40,17 +57,17 @@ namespace osu.Game.Screens.Select
                 if (groupedSets)
                 {
                     if (ab.BeatmapSet!.Equals(bb.BeatmapSet))
-                        return compareDifficulty(ab, bb, criteria.Sort);
+                        return compareDifficulty(ab, bb, criteria.Sort, recalculatedStars);
 
                     // If we're grouping by sets, all fallback sorts need to be aggregates for the set.
-                    return compare(ab, bb, criteria.Sort, aggregate: true);
+                    return compare(ab, bb, criteria.Sort, aggregate: true, recalculatedStars);
                 }
 
-                return compare(ab, bb, criteria.Sort, aggregate: false);
+                return compare(ab, bb, criteria.Sort, aggregate: false, recalculatedStars);
             })).ToList();
         }, cancellationToken).ConfigureAwait(false);
 
-        private static int compare(BeatmapInfo a, BeatmapInfo b, SortMode sort, bool aggregate)
+        private int compare(BeatmapInfo a, BeatmapInfo b, SortMode sort, bool aggregate, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
         {
             int comparison;
 
@@ -76,6 +93,13 @@ namespace osu.Game.Screens.Select
 
                 case SortMode.Difficulty:
                     comparison = a.StarRating.CompareTo(b.StarRating);
+                    break;
+
+                case SortMode.RecalculatedDifficulty:
+                    if (aggregate)
+                        comparison = compareUsingAggregateMax(a, b, beatmap => getStarRatingForSort(beatmap, recalculatedStars));
+                    else
+                        comparison = getStarRatingForSort(a, recalculatedStars).CompareTo(getStarRatingForSort(b, recalculatedStars));
                     break;
 
                 case SortMode.DateAdded:
@@ -128,12 +152,17 @@ namespace osu.Game.Screens.Select
             return comparison;
         }
 
-        private static int compareDifficulty(BeatmapInfo a, BeatmapInfo b, SortMode sort)
+        private static int compareDifficulty(BeatmapInfo a, BeatmapInfo b, SortMode sort, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
         {
             int comparison = a.Ruleset.CompareTo(b.Ruleset);
 
             if (comparison == 0)
-                comparison = a.StarRating.CompareTo(b.StarRating);
+            {
+                if (sort == SortMode.RecalculatedDifficulty)
+                    comparison = getStarRatingForSort(a, recalculatedStars).CompareTo(getStarRatingForSort(b, recalculatedStars));
+                else
+                    comparison = a.StarRating.CompareTo(b.StarRating);
+            }
 
             return comparison;
         }
@@ -151,6 +180,50 @@ namespace osu.Game.Screens.Select
             if (!bAny) return 1;
 
             return aMatchedBeatmaps.Max(func).CompareTo(bMatchedBeatmaps.Max(func));
+        }
+
+        private static double getStarRatingForSort(BeatmapInfo beatmap, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
+            => recalculatedStars?.GetValueOrDefault(beatmap) ?? beatmap.StarRating;
+
+        private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria)
+        {
+            var starsByBeatmap = new Dictionary<BeatmapInfo, double>();
+
+            foreach (BeatmapInfo beatmap in items.Select(i => (BeatmapInfo)i.Model).Distinct())
+                starsByBeatmap[beatmap] = getOrQueueRecalculatedStarRating(beatmap, criteria);
+
+            return starsByBeatmap;
+        }
+
+        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria)
+        {
+            if (getDifficultyCache == null)
+                return beatmap.StarRating;
+
+            var lookup = new BeatmapDifficultyCache.DifficultyCacheLookup(beatmap, criteria.Ruleset, criteria.Mods);
+
+            Task<StarDifficulty?> task = inFlightDifficultyLookups.GetOrAdd(lookup, l =>
+            {
+                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, CancellationToken.None);
+
+                if (!lookupTask.IsCompleted)
+                {
+                    _ = lookupTask.ContinueWith(t =>
+                    {
+                        inFlightDifficultyLookups.TryRemove(l, out _);
+
+                        if (t.IsCompletedSuccessfully && t.GetResultSafely() != null)
+                            requestResort?.Invoke();
+                    }, TaskScheduler.Default);
+                }
+
+                return lookupTask;
+            });
+
+            if (!task.IsCompleted)
+                return beatmap.StarRating;
+
+            return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
         }
     }
 }

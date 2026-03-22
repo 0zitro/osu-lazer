@@ -31,6 +31,7 @@ using osu.Game.Graphics.UserInterface;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
 using osu.Game.Scoring;
+using osu.Game.Screens.Select.Filter;
 using Realms;
 
 namespace osu.Game.Screens.Select
@@ -57,6 +58,7 @@ namespace osu.Game.Screens.Select
         private readonly LoadingLayer loading;
 
         private readonly BeatmapCarouselFilterGrouping grouping;
+        private BeatmapDifficultyCache difficultyCache = null!;
 
         /// <summary>
         /// Total number of beatmap difficulties displayed with the filter.
@@ -103,7 +105,7 @@ namespace osu.Game.Screens.Select
             Filters = new ICarouselFilter[]
             {
                 new BeatmapCarouselFilterMatching(() => Criteria!),
-                new BeatmapCarouselFilterSorting(() => Criteria!),
+                new BeatmapCarouselFilterSorting(() => Criteria!, () => difficultyCache, requestRecalculatedDifficultyResort),
                 grouping = new BeatmapCarouselFilterGrouping
                 {
                     GetCriteria = () => Criteria!,
@@ -117,8 +119,10 @@ namespace osu.Game.Screens.Select
         }
 
         [BackgroundDependencyLoader]
-        private void load(BeatmapStore beatmapStore, AudioManager audio, OsuConfigManager config, CancellationToken? cancellationToken)
+        private void load(BeatmapStore beatmapStore, AudioManager audio, OsuConfigManager config, BeatmapDifficultyCache difficultyCache, CancellationToken? cancellationToken)
         {
+            this.difficultyCache = difficultyCache;
+
             setupPools();
             detachedBeatmaps = beatmapStore.GetBeatmapSets(cancellationToken);
             loadSamples(audio);
@@ -776,6 +780,7 @@ namespace osu.Game.Screens.Select
         public FilterCriteria? Criteria { get; private set; }
 
         private ScheduledDelegate? loadingDebounce;
+        private ScheduledDelegate? recalculatedDifficultyResortDebounce;
 
         public void Filter(FilterCriteria criteria, bool showLoadingImmediately = false)
         {
@@ -800,6 +805,24 @@ namespace osu.Game.Screens.Select
                 Scroll.FadeColour(OsuColour.Gray(1f), 500, Easing.OutQuint);
                 loading.Hide();
             }));
+        }
+
+        private void requestRecalculatedDifficultyResort()
+        {
+            Schedule(() =>
+            {
+                if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
+                    return;
+
+                recalculatedDifficultyResortDebounce?.Cancel();
+                recalculatedDifficultyResortDebounce = Scheduler.AddDelayed(() =>
+                {
+                    if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
+                        return;
+
+                    _ = FilterAsync();
+                }, 100);
+            });
         }
 
         protected override Task<IEnumerable<CarouselItem>> FilterAsync(bool clearExistingPanels = false)

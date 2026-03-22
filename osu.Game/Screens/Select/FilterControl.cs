@@ -12,6 +12,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Input;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
+using osu.Framework.Threading;
 using osu.Game.Beatmaps;
 using osu.Game.Collections;
 using osu.Game.Configuration;
@@ -81,6 +82,8 @@ namespace osu.Game.Screens.Select
         private FilterCriteria currentCriteria = null!;
 
         private IDisposable? collectionsSubscription;
+        private ModSettingChangeTracker? modSettingChangeTracker;
+        private ScheduledDelegate? debouncedModSettingsCriteriaUpdate;
 
         [BackgroundDependencyLoader]
         private void load(IAPIProvider api)
@@ -221,6 +224,8 @@ namespace osu.Game.Screens.Select
             ruleset.BindValueChanged(_ => updateCriteria());
             mods.BindValueChanged(m =>
             {
+                updateModSettingTracking(m.NewValue);
+
                 // The following is a note carried from old song select and may not be a valid reason anymore:
                 // // Mods are updated once by the mod select overlay when song select is entered,
                 // // regardless of if there are any mods or any changes have taken place.
@@ -230,10 +235,12 @@ namespace osu.Game.Screens.Select
                 if (m.NewValue.SequenceEqual(m.OldValue))
                     return;
 
-                var rulesetCriteria = currentCriteria.RulesetCriteria;
-                if (rulesetCriteria?.FilterMayChangeFromMods(m) == true)
+                var rulesetCriteria = ReferenceEquals(currentCriteria, null) ? null : currentCriteria.RulesetCriteria;
+                if (sortDropdown.Current.Value == SortMode.RecalculatedDifficulty || rulesetCriteria?.FilterMayChangeFromMods(m) == true)
                     updateCriteria();
             });
+
+            updateModSettingTracking(mods.Value);
 
             searchTextBox.Current.BindValueChanged(_ => updateCriteria());
             difficultyRangeSlider.LowerBound.BindValueChanged(_ => updateCriteria());
@@ -263,10 +270,26 @@ namespace osu.Game.Screens.Select
             updateCriteria();
         }
 
+        private void updateModSettingTracking(IReadOnlyList<Mod> modsToTrack)
+        {
+            modSettingChangeTracker?.Dispose();
+            modSettingChangeTracker = new ModSettingChangeTracker(modsToTrack);
+            modSettingChangeTracker.SettingChanged += _ =>
+            {
+                if (sortDropdown.Current.Value != SortMode.RecalculatedDifficulty)
+                    return;
+
+                debouncedModSettingsCriteriaUpdate?.Cancel();
+                debouncedModSettingsCriteriaUpdate = Scheduler.AddDelayed(() => updateCriteria(), 100);
+            };
+        }
+
         protected override void Dispose(bool isDisposing)
         {
             base.Dispose(isDisposing);
             collectionsSubscription?.Dispose();
+            modSettingChangeTracker?.Dispose();
+            debouncedModSettingsCriteriaUpdate?.Cancel();
         }
 
         /// <summary>

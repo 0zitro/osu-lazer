@@ -153,6 +153,7 @@ namespace osu.Game.Tests.Visual.SongSelect
             SortBy(SortMode.BPM);
             SortBy(SortMode.Length);
             SortBy(SortMode.Difficulty);
+            SortBy(SortMode.RecalculatedDifficulty);
             SortBy(SortMode.Source);
         }
 
@@ -222,6 +223,28 @@ namespace osu.Game.Tests.Visual.SongSelect
             // Add filterable mod. Should re-filter.
             AddStep("add filterable mod", () => SelectedMods.Value = new Mod[] { new ManiaModKey3() });
             AddAssert("filter count is 5", () => filterOperationsCount, () => Is.EqualTo(5));
+        }
+
+        [Test]
+        public void TestRecalculatedDifficultySortUpdatesOnModSettingChange()
+        {
+            ImportBeatmapForRuleset(0);
+
+            LoadSongSelect();
+
+            AddStep("sort by recalculated difficulty", () => Config.SetValue(OsuSetting.SongSelectSortingMode, SortMode.RecalculatedDifficulty));
+            AddAssert("filter count is 1", () => filterOperationsCount, () => Is.EqualTo(1));
+
+            AddStep("add DA mod", () => SelectedMods.Value = new Mod[] { new OsuModDifficultyAdjust() });
+            AddAssert("filter count is 2", () => filterOperationsCount, () => Is.EqualTo(2));
+
+            AddStep("change DA setting", () =>
+            {
+                var mod = (OsuModDifficultyAdjust)SelectedMods.Value.Single();
+                mod.ApproachRate.Value = 10;
+            });
+
+            AddUntilStep("filter count is 3", () => filterOperationsCount, () => Is.EqualTo(3));
         }
 
         [Test]
