@@ -12,7 +12,6 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Input;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
-using osu.Framework.Threading;
 using osu.Game.Beatmaps;
 using osu.Game.Collections;
 using osu.Game.Configuration;
@@ -83,7 +82,6 @@ namespace osu.Game.Screens.Select
 
         private IDisposable? collectionsSubscription;
         private ModSettingChangeTracker? modSettingChangeTracker;
-        private ScheduledDelegate? debouncedModSettingsCriteriaUpdate;
 
         [BackgroundDependencyLoader]
         private void load(IAPIProvider api)
@@ -279,8 +277,7 @@ namespace osu.Game.Screens.Select
                 if (sortDropdown.Current.Value != SortMode.RecalculatedDifficulty)
                     return;
 
-                debouncedModSettingsCriteriaUpdate?.Cancel();
-                debouncedModSettingsCriteriaUpdate = Scheduler.AddDelayed(() => updateCriteria(), 100);
+                updateCriteria();
             };
         }
 
@@ -289,7 +286,6 @@ namespace osu.Game.Screens.Select
             base.Dispose(isDisposing);
             collectionsSubscription?.Dispose();
             modSettingChangeTracker?.Dispose();
-            debouncedModSettingsCriteriaUpdate?.Cancel();
         }
 
         /// <summary>

@@ -190,17 +190,17 @@ namespace osu.Game.Tests.Visual.SongSelect
                 [beatmapB] = 9,
             });
 
-            var results = (await runSorting(SortMode.RecalculatedDifficulty, new List<BeatmapSetInfo> { setA, setB }, difficultyCache)).ToList();
+            var sorter = new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = SortMode.RecalculatedDifficulty }, () => difficultyCache);
+            var carouselItems = await sorter.Run(new[] { new CarouselItem(beatmapA), new CarouselItem(beatmapB) }, CancellationToken.None);
+            var results = carouselItems.Select(ci => ci.Model).OfType<BeatmapInfo>().ToList();
 
             Assert.That(results.First(), Is.EqualTo(beatmapA));
             Assert.That(results.Last(), Is.EqualTo(beatmapB));
         }
 
-        private static async Task<IEnumerable<BeatmapInfo>> runSorting(SortMode sort, List<BeatmapSetInfo> beatmapSets, BeatmapDifficultyCache? difficultyCache = null)
+        private static async Task<IEnumerable<BeatmapInfo>> runSorting(SortMode sort, List<BeatmapSetInfo> beatmapSets)
         {
-            var sorter = difficultyCache != null
-                ? new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort }, () => difficultyCache)
-                : new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort });
+            var sorter = new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort });
 
             var carouselItems = await sorter.Run(beatmapSets.SelectMany(s => s.Beatmaps.Select(b => new CarouselItem(b))), CancellationToken.None);
             return carouselItems.Select(ci => ci.Model).OfType<BeatmapInfo>();

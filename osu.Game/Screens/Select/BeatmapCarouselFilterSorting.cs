@@ -47,6 +47,109 @@ namespace osu.Game.Screens.Select
             if (criteria.Sort == SortMode.RecalculatedDifficulty)
                 recalculatedStars = createRecalculatedStarsMap(items, criteria);
 
+            double getStarRatingForSort(BeatmapInfo beatmap)
+                => recalculatedStars?.GetValueOrDefault(beatmap) ?? beatmap.StarRating;
+
+            int compare(BeatmapInfo a, BeatmapInfo b, bool aggregate)
+            {
+                int comparison;
+
+                switch (criteria.Sort)
+                {
+                    case SortMode.Artist:
+                        comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Artist, b.BeatmapSet!.Metadata.Artist);
+                        if (comparison == 0)
+                            goto case SortMode.Title;
+                        break;
+
+                    case SortMode.Title:
+                        comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Title, b.BeatmapSet!.Metadata.Title);
+                        break;
+
+                    case SortMode.Author:
+                        comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Author.Username, b.BeatmapSet!.Metadata.Author.Username);
+                        break;
+
+                    case SortMode.Source:
+                        comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Source, b.BeatmapSet!.Metadata.Source);
+                        break;
+
+                    case SortMode.Difficulty:
+                        comparison = a.StarRating.CompareTo(b.StarRating);
+                        break;
+
+                    case SortMode.RecalculatedDifficulty:
+                        if (aggregate)
+                            comparison = compareUsingAggregateMax(a, b, getStarRatingForSort);
+                        else
+                            comparison = getStarRatingForSort(a).CompareTo(getStarRatingForSort(b));
+                        break;
+
+                    case SortMode.DateAdded:
+                        comparison = b.BeatmapSet!.DateAdded.CompareTo(a.BeatmapSet!.DateAdded);
+                        break;
+
+                    case SortMode.DateRanked:
+                        comparison = Nullable.Compare(b.BeatmapSet!.DateRanked, a.BeatmapSet!.DateRanked);
+                        break;
+
+                    case SortMode.DateSubmitted:
+                        comparison = Nullable.Compare(b.BeatmapSet!.DateSubmitted, a.BeatmapSet!.DateSubmitted);
+                        break;
+
+                    case SortMode.LastPlayed:
+                        if (aggregate)
+                            comparison = compareUsingAggregateMax(b, a, static b => (b.LastPlayed ?? DateTimeOffset.MinValue).ToUnixTimeSeconds());
+                        else
+                            comparison = Nullable.Compare(b.LastPlayed, a.LastPlayed);
+                        break;
+
+                    case SortMode.BPM:
+                        if (aggregate)
+                            comparison = compareUsingAggregateMax(a, b, static b => b.BPM);
+                        else
+                            comparison = a.BPM.CompareTo(b.BPM);
+                        break;
+
+                    case SortMode.Length:
+                        if (aggregate)
+                            comparison = compareUsingAggregateMax(a, b, static b => b.Length);
+                        else
+                            comparison = a.Length.CompareTo(b.Length);
+                        break;
+
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+
+                // If the initial sort could not differentiate, attempt to use DateAdded to order sets in a stable fashion.
+                // The directionality of this matches the current SortMode.DateAdded, but we may want to reconsider if that becomes a user decision (ie. asc / desc).
+                if (comparison == 0)
+                    comparison = b.BeatmapSet!.DateAdded.CompareTo(a.BeatmapSet!.DateAdded);
+
+                // If DateAdded fails to break the tie, fallback to our internal GUID for stability.
+                // This basically means it's a stable random sort.
+                if (comparison == 0)
+                    comparison = b.BeatmapSet!.ID.CompareTo(a.BeatmapSet!.ID);
+
+                return comparison;
+            }
+
+            int compareDifficulty(BeatmapInfo a, BeatmapInfo b)
+            {
+                int comparison = a.Ruleset.CompareTo(b.Ruleset);
+
+                if (comparison == 0)
+                {
+                    if (criteria.Sort == SortMode.RecalculatedDifficulty)
+                        comparison = getStarRatingForSort(a).CompareTo(getStarRatingForSort(b));
+                    else
+                        comparison = a.StarRating.CompareTo(b.StarRating);
+                }
+
+                return comparison;
+            }
+
             BeatmapItemsCount = items.Count();
 
             return items.Order(Comparer<CarouselItem>.Create((a, b) =>
@@ -57,115 +160,15 @@ namespace osu.Game.Screens.Select
                 if (groupedSets)
                 {
                     if (ab.BeatmapSet!.Equals(bb.BeatmapSet))
-                        return compareDifficulty(ab, bb, criteria.Sort, recalculatedStars);
+                        return compareDifficulty(ab, bb);
 
                     // If we're grouping by sets, all fallback sorts need to be aggregates for the set.
-                    return compare(ab, bb, criteria.Sort, aggregate: true, recalculatedStars);
+                    return compare(ab, bb, aggregate: true);
                 }
 
-                return compare(ab, bb, criteria.Sort, aggregate: false, recalculatedStars);
+                return compare(ab, bb, aggregate: false);
             })).ToList();
         }, cancellationToken).ConfigureAwait(false);
-
-        private int compare(BeatmapInfo a, BeatmapInfo b, SortMode sort, bool aggregate, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
-        {
-            int comparison;
-
-            switch (sort)
-            {
-                case SortMode.Artist:
-                    comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Artist, b.BeatmapSet!.Metadata.Artist);
-                    if (comparison == 0)
-                        goto case SortMode.Title;
-                    break;
-
-                case SortMode.Title:
-                    comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Title, b.BeatmapSet!.Metadata.Title);
-                    break;
-
-                case SortMode.Author:
-                    comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Author.Username, b.BeatmapSet!.Metadata.Author.Username);
-                    break;
-
-                case SortMode.Source:
-                    comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Source, b.BeatmapSet!.Metadata.Source);
-                    break;
-
-                case SortMode.Difficulty:
-                    comparison = a.StarRating.CompareTo(b.StarRating);
-                    break;
-
-                case SortMode.RecalculatedDifficulty:
-                    if (aggregate)
-                        comparison = compareUsingAggregateMax(a, b, beatmap => getStarRatingForSort(beatmap, recalculatedStars));
-                    else
-                        comparison = getStarRatingForSort(a, recalculatedStars).CompareTo(getStarRatingForSort(b, recalculatedStars));
-                    break;
-
-                case SortMode.DateAdded:
-                    comparison = b.BeatmapSet!.DateAdded.CompareTo(a.BeatmapSet!.DateAdded);
-                    break;
-
-                case SortMode.DateRanked:
-                    comparison = Nullable.Compare(b.BeatmapSet!.DateRanked, a.BeatmapSet!.DateRanked);
-                    break;
-
-                case SortMode.DateSubmitted:
-                    comparison = Nullable.Compare(b.BeatmapSet!.DateSubmitted, a.BeatmapSet!.DateSubmitted);
-                    break;
-
-                case SortMode.LastPlayed:
-                    if (aggregate)
-                        comparison = compareUsingAggregateMax(b, a, static b => (b.LastPlayed ?? DateTimeOffset.MinValue).ToUnixTimeSeconds());
-                    else
-                        comparison = Nullable.Compare(b.LastPlayed, a.LastPlayed);
-                    break;
-
-                case SortMode.BPM:
-                    if (aggregate)
-                        comparison = compareUsingAggregateMax(a, b, static b => b.BPM);
-                    else
-                        comparison = a.BPM.CompareTo(b.BPM);
-                    break;
-
-                case SortMode.Length:
-                    if (aggregate)
-                        comparison = compareUsingAggregateMax(a, b, static b => b.Length);
-                    else
-                        comparison = a.Length.CompareTo(b.Length);
-                    break;
-
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
-
-            // If the initial sort could not differentiate, attempt to use DateAdded to order sets in a stable fashion.
-            // The directionality of this matches the current SortMode.DateAdded, but we may want to reconsider if that becomes a user decision (ie. asc / desc).
-            if (comparison == 0)
-                comparison = b.BeatmapSet!.DateAdded.CompareTo(a.BeatmapSet!.DateAdded);
-
-            // If DateAdded fails to break the tie, fallback to our internal GUID for stability.
-            // This basically means it's a stable random sort.
-            if (comparison == 0)
-                comparison = b.BeatmapSet!.ID.CompareTo(a.BeatmapSet!.ID);
-
-            return comparison;
-        }
-
-        private static int compareDifficulty(BeatmapInfo a, BeatmapInfo b, SortMode sort, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
-        {
-            int comparison = a.Ruleset.CompareTo(b.Ruleset);
-
-            if (comparison == 0)
-            {
-                if (sort == SortMode.RecalculatedDifficulty)
-                    comparison = getStarRatingForSort(a, recalculatedStars).CompareTo(getStarRatingForSort(b, recalculatedStars));
-                else
-                    comparison = a.StarRating.CompareTo(b.StarRating);
-            }
-
-            return comparison;
-        }
 
         private static int compareUsingAggregateMax(BeatmapInfo a, BeatmapInfo b, Func<BeatmapInfo, double> func)
         {
@@ -181,10 +184,6 @@ namespace osu.Game.Screens.Select
 
             return aMatchedBeatmaps.Max(func).CompareTo(bMatchedBeatmaps.Max(func));
         }
-
-        private static double getStarRatingForSort(BeatmapInfo beatmap, IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars)
-            => recalculatedStars?.GetValueOrDefault(beatmap) ?? beatmap.StarRating;
-
         private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria)
         {
             var starsByBeatmap = new Dictionary<BeatmapInfo, double>();

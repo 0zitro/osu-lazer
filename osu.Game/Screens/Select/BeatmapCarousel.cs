@@ -58,7 +58,9 @@ namespace osu.Game.Screens.Select
         private readonly LoadingLayer loading;
 
         private readonly BeatmapCarouselFilterGrouping grouping;
-        private BeatmapDifficultyCache difficultyCache = null!;
+
+        [Resolved]
+        private BeatmapDifficultyCache difficultyCache { get; set; } = null!;
 
         /// <summary>
         /// Total number of beatmap difficulties displayed with the filter.
@@ -119,10 +121,8 @@ namespace osu.Game.Screens.Select
         }
 
         [BackgroundDependencyLoader]
-        private void load(BeatmapStore beatmapStore, AudioManager audio, OsuConfigManager config, BeatmapDifficultyCache difficultyCache, CancellationToken? cancellationToken)
+        private void load(BeatmapStore beatmapStore, AudioManager audio, OsuConfigManager config, CancellationToken? cancellationToken)
         {
-            this.difficultyCache = difficultyCache;
-
             setupPools();
             detachedBeatmaps = beatmapStore.GetBeatmapSets(cancellationToken);
             loadSamples(audio);
@@ -780,7 +780,6 @@ namespace osu.Game.Screens.Select
         public FilterCriteria? Criteria { get; private set; }
 
         private ScheduledDelegate? loadingDebounce;
-        private ScheduledDelegate? recalculatedDifficultyResortDebounce;
 
         public void Filter(FilterCriteria criteria, bool showLoadingImmediately = false)
         {
@@ -814,15 +813,16 @@ namespace osu.Game.Screens.Select
                 if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
                     return;
 
-                recalculatedDifficultyResortDebounce?.Cancel();
-                recalculatedDifficultyResortDebounce = Scheduler.AddDelayed(() =>
-                {
-                    if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
-                        return;
-
-                    _ = FilterAsync();
-                }, 100);
+                Scheduler.AddOnce(triggerRecalculatedDifficultyResort);
             });
+        }
+
+        private void triggerRecalculatedDifficultyResort()
+        {
+            if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
+                return;
+
+            _ = FilterAsync();
         }
 
         protected override Task<IEnumerable<CarouselItem>> FilterAsync(bool clearExistingPanels = false)
