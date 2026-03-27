@@ -131,10 +131,13 @@ namespace osu.Game.Beatmaps
         /// <returns>A bindable that is updated to contain the star difficulty when it becomes available. May be an approximation while in an initial calculating state.</returns>
         public IBindable<StarDifficulty> GetBindableDifficulty(IBeatmapInfo beatmapInfo, CancellationToken cancellationToken = default, int computationDelay = 0)
         {
+            StarDifficulty initialDifficulty = getCachedDifficulty(beatmapInfo, currentRuleset.Value, currentMods.Value)
+                                             ?? new StarDifficulty(beatmapInfo.StarRating, 0);
+
             var bindable = new BindableStarDifficulty(beatmapInfo, cancellationToken)
             {
-                // Start with an approximate known value instead of zero.
-                Value = new StarDifficulty(beatmapInfo.StarRating, 0)
+                // Start with a known cached value if available, otherwise approximate from beatmap metadata.
+                Value = initialDifficulty
             };
 
             updateBindable(bindable, currentRuleset.Value, currentMods.Value, cancellationToken, computationDelay);
@@ -143,6 +146,22 @@ namespace osu.Game.Beatmaps
                 trackedBindables.Add(bindable);
 
             return bindable;
+        }
+
+        private StarDifficulty? getCachedDifficulty(IBeatmapInfo beatmapInfo, IRulesetInfo? rulesetInfo = null, IEnumerable<Mod>? mods = null)
+        {
+            rulesetInfo ??= beatmapInfo.Ruleset;
+
+            var localBeatmapInfo = beatmapInfo as BeatmapInfo;
+            var localRulesetInfo = rulesetInfo as RulesetInfo;
+
+            // Difficulty can only be computed and cached if beatmap/ruleset are locally available.
+            if (localBeatmapInfo == null || localRulesetInfo == null)
+                return null;
+
+            return CheckExists(new DifficultyCacheLookup(localBeatmapInfo, localRulesetInfo, mods), out var cached)
+                ? cached
+                : null;
         }
 
         /// <summary>

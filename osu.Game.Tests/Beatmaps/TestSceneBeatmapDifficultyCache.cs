@@ -163,6 +163,33 @@ namespace osu.Game.Tests.Beatmaps
         }
 
         [Test]
+        public void TestGetBindableDifficultyStartsFromCachedValue()
+        {
+            IBindable<StarDifficulty> bindable = null;
+            double initialStars = 0;
+
+            AddStep("set computation function", () => difficultyCache.ComputeDifficulty = _ => new StarDifficulty(BASE_STARS + 2, 0));
+            AddStep("clear existing cache", () => difficultyCache.Clear());
+            AddStep("set ruleset to beatmap ruleset", () => Ruleset.Value = importedSet.Beatmaps.First().Ruleset);
+            AddStep("clear selected mods", () => SelectedMods.Value = Array.Empty<Mod>());
+
+            AddStep("prime cache", () =>
+            {
+                var difficulty = difficultyCache.GetDifficultyAsync(importedSet.Beatmaps.First(), Ruleset.Value, SelectedMods.Value).GetResultSafely();
+                Assert.That(difficulty, Is.Not.Null);
+                Assert.That(difficulty.Value.Stars, Is.EqualTo(BASE_STARS + 2));
+            });
+
+            AddStep("request bindable difficulty", () =>
+            {
+                bindable = difficultyCache.GetBindableDifficulty(importedSet.Beatmaps.First());
+                initialStars = bindable.Value.Stars;
+            });
+
+            AddAssert("bindable starts from cached stars", () => initialStars, () => Is.EqualTo(BASE_STARS + 2));
+        }
+
+        [Test]
         public void TestKeyEqualsWithDifferentModInstances()
         {
             var key1 = new BeatmapDifficultyCache.DifficultyCacheLookup(new BeatmapInfo { ID = guid }, new RulesetInfo { OnlineID = 0 }, new Mod[] { new OsuModHardRock(), new OsuModHidden() });
