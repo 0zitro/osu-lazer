@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using osu.Framework.Extensions;
 using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Screens.Select.Filter;
 using osu.Game.Utils;
 
@@ -211,7 +212,7 @@ namespace osu.Game.Screens.Select
                     {
                         inFlightDifficultyLookups.TryRemove(l, out _);
 
-                        if (t.IsCompletedSuccessfully && t.GetResultSafely() != null)
+                        if (t.IsCompletedSuccessfully && t.GetResultSafely() != null && matchesCurrentCriteria(l))
                             requestResort?.Invoke();
                     }, TaskScheduler.Default);
                 }
@@ -223,6 +224,30 @@ namespace osu.Game.Screens.Select
                 return beatmap.StarRating;
 
             return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
+        }
+
+        private bool matchesCurrentCriteria(in BeatmapDifficultyCache.DifficultyCacheLookup lookup)
+        {
+            FilterCriteria criteria = getCriteria();
+
+            if (criteria.Sort != SortMode.RecalculatedDifficulty)
+                return false;
+
+            if (!(criteria.Ruleset ?? lookup.BeatmapInfo.Ruleset).Equals(lookup.Ruleset))
+                return false;
+
+            return modsEqual(criteria.Mods, lookup.OrderedMods);
+        }
+
+        private static bool modsEqual(IReadOnlyList<Mod>? criteriaMods, IReadOnlyList<Mod> lookupMods)
+        {
+            if (criteriaMods == null || criteriaMods.Count == 0)
+                return lookupMods.Count == 0;
+
+            if (criteriaMods.Count != lookupMods.Count)
+                return false;
+
+            return lookupMods.SequenceEqual(criteriaMods.OrderBy(m => m.Acronym));
         }
     }
 }

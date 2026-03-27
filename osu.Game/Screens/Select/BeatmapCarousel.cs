@@ -106,7 +106,7 @@ namespace osu.Game.Screens.Select
 
             Filters = new ICarouselFilter[]
             {
-                new BeatmapCarouselFilterMatching(() => Criteria!),
+                new BeatmapCarouselFilterMatching(() => Criteria!, () => difficultyCache, requestRecalculatedDifficultyResort),
                 new BeatmapCarouselFilterSorting(() => Criteria!, () => difficultyCache, requestRecalculatedDifficultyResort),
                 grouping = new BeatmapCarouselFilterGrouping
                 {
@@ -780,6 +780,7 @@ namespace osu.Game.Screens.Select
         public FilterCriteria? Criteria { get; private set; }
 
         private ScheduledDelegate? loadingDebounce;
+        private ScheduledDelegate? recalculatedDifficultyResortDebounce;
 
         public void Filter(FilterCriteria criteria, bool showLoadingImmediately = false)
         {
@@ -813,12 +814,15 @@ namespace osu.Game.Screens.Select
                 if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
                     return;
 
-                Scheduler.AddOnce(triggerRecalculatedDifficultyResort);
+                recalculatedDifficultyResortDebounce?.Cancel();
+                recalculatedDifficultyResortDebounce = Scheduler.AddDelayed(triggerRecalculatedDifficultyResort, 100);
             });
         }
 
         private void triggerRecalculatedDifficultyResort()
         {
+            recalculatedDifficultyResortDebounce = null;
+
             if (Criteria?.Sort != SortMode.RecalculatedDifficulty)
                 return;
 

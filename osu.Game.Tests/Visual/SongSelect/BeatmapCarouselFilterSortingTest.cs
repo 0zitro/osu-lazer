@@ -12,6 +12,7 @@ using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
 using osu.Game.Rulesets;
 using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu.Mods;
 using osu.Game.Screens.Select;
 using osu.Game.Screens.Select.Filter;
 using osu.Game.Tests.Resources;
@@ -198,6 +199,48 @@ namespace osu.Game.Tests.Visual.SongSelect
             Assert.That(results.Last(), Is.EqualTo(beatmapB));
         }
 
+        [Test]
+        public async Task TestStaleLookupCompletionDoesNotTriggerResort()
+        {
+            var beatmap = TestResources.CreateTestBeatmapSetInfo(1).Beatmaps.Single();
+
+            var oldMods = new Mod[] { new OsuModDoubleTime() };
+            var newMods = new Mod[] { new OsuModHalfTime() };
+
+            var criteria = new FilterCriteria
+            {
+                Sort = SortMode.RecalculatedDifficulty,
+                Ruleset = beatmap.Ruleset,
+                Mods = oldMods,
+            };
+
+            int resortRequests = 0;
+
+            var cache = new DelayedTestBeatmapDifficultyCache();
+            var sorter = new BeatmapCarouselFilterSorting(() => criteria, () => cache, () => Interlocked.Increment(ref resortRequests));
+
+            await sorter.Run(new[] { new CarouselItem(beatmap) }, CancellationToken.None);
+
+            criteria = new FilterCriteria
+            {
+                Sort = SortMode.RecalculatedDifficulty,
+                Ruleset = beatmap.Ruleset,
+                Mods = newMods,
+            };
+
+            await sorter.Run(new[] { new CarouselItem(beatmap) }, CancellationToken.None);
+
+            cache.CompleteFor(beatmap, oldMods, 6);
+            await Task.Delay(100);
+
+            Assert.That(resortRequests, Is.EqualTo(0));
+
+            cache.CompleteFor(beatmap, newMods, 4);
+            await Task.Delay(100);
+
+            Assert.That(resortRequests, Is.EqualTo(1));
+        }
+
         private static async Task<IEnumerable<BeatmapInfo>> runSorting(SortMode sort, List<BeatmapSetInfo> beatmapSets)
         {
             var sorter = new BeatmapCarouselFilterSorting(() => new FilterCriteria { Sort = sort });
@@ -222,6 +265,26 @@ namespace osu.Game.Tests.Visual.SongSelect
                     return Task.FromResult<StarDifficulty?>(new StarDifficulty(stars, 0));
 
                 return Task.FromResult<StarDifficulty?>(new StarDifficulty(beatmapInfo.StarRating, 0));
+            }
+        }
+
+        private partial class DelayedTestBeatmapDifficultyCache : BeatmapDifficultyCache
+        {
+            private readonly List<(DifficultyCacheLookup lookup, TaskCompletionSource<StarDifficulty?> task)> lookups = new List<(DifficultyCacheLookup lookup, TaskCompletionSource<StarDifficulty?> task)>();
+
+            public override Task<StarDifficulty?> GetDifficultyAsync(IBeatmapInfo beatmapInfo, IRulesetInfo? rulesetInfo = null, IEnumerable<Mod>? mods = null,
+                                                                      CancellationToken cancellationToken = default, int computationDelay = 0)
+            {
+                var lookup = new DifficultyCacheLookup((BeatmapInfo)beatmapInfo, (RulesetInfo?)rulesetInfo, mods);
+                var task = new TaskCompletionSource<StarDifficulty?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                lookups.Add((lookup, task));
+                return task.Task;
+            }
+
+            public void CompleteFor(BeatmapInfo beatmap, IReadOnlyList<Mod> mods, double stars)
+            {
+                var matching = lookups.Single(entry => entry.lookup.BeatmapInfo.Equals(beatmap) && entry.lookup.OrderedMods.SequenceEqual(mods.OrderBy(m => m.Acronym)));
+                matching.task.SetResult(new StarDifficulty(stars, 0));
             }
         }
     }

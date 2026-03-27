@@ -277,7 +277,7 @@ namespace osu.Game.Screens.Select
                 if (sortDropdown.Current.Value != SortMode.RecalculatedDifficulty)
                     return;
 
-                updateCriteria();
+                Scheduler.AddOnce(() => updateCriteria());
             };
         }
 

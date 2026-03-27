@@ -2,12 +2,16 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using osu.Framework.Extensions;
 using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
+using osu.Game.Rulesets.Mods;
+using osu.Game.Screens.Select.Filter;
 using osu.Game.Utils;
 
 namespace osu.Game.Screens.Select
@@ -15,12 +19,22 @@ namespace osu.Game.Screens.Select
     public class BeatmapCarouselFilterMatching : ICarouselFilter
     {
         private readonly Func<FilterCriteria> getCriteria;
+        private readonly Func<BeatmapDifficultyCache>? getDifficultyCache;
+        private readonly Action? requestRefilter;
+
+        /// <summary>
+        /// In-flight lookups are tracked here to avoid duplicate expensive calculations.
+        /// Completed lookups are removed and resolved via <see cref="BeatmapDifficultyCache"/> caching.
+        /// </summary>
+        private readonly ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>> inFlightDifficultyLookups = new ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>>();
 
         public int BeatmapItemsCount { get; private set; }
 
-        public BeatmapCarouselFilterMatching(Func<FilterCriteria> getCriteria)
+        public BeatmapCarouselFilterMatching(Func<FilterCriteria> getCriteria, Func<BeatmapDifficultyCache>? getDifficultyCache = null, Action? requestRefilter = null)
         {
             this.getCriteria = getCriteria;
+            this.getDifficultyCache = getDifficultyCache;
+            this.requestRefilter = requestRefilter;
         }
 
         public async Task<List<CarouselItem>> Run(IEnumerable<CarouselItem> items, CancellationToken cancellationToken) => await Task.Run(() =>
@@ -41,7 +55,7 @@ namespace osu.Game.Screens.Select
                 if (beatmap.Hidden)
                     continue;
 
-                if (!CheckCriteriaMatch(beatmap, criteria))
+                if (!checkCriteriaMatch(beatmap, criteria))
                     continue;
 
                 countMatching++;
@@ -51,7 +65,19 @@ namespace osu.Game.Screens.Select
             BeatmapItemsCount = countMatching;
         }
 
-        public static bool CheckCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria)
+        public static bool CheckCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria) => checkCriteriaMatch(beatmap, criteria, beatmap.StarRating);
+
+        private bool checkCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria)
+        {
+            double starRating = beatmap.StarRating;
+
+            if (usesRecalculatedStarsForFiltering(criteria))
+                starRating = getOrQueueRecalculatedStarRating(beatmap, criteria);
+
+            return checkCriteriaMatch(beatmap, criteria, starRating);
+        }
+
+        private static bool checkCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria, double starRating)
         {
             bool match = criteria.Ruleset == null || beatmap.AllowGameplayWithRuleset(criteria.Ruleset!, criteria.AllowConvertedBeatmaps);
 
@@ -78,7 +104,7 @@ namespace osu.Game.Screens.Select
 
             if (!match) return false;
 
-            match &= !criteria.StarDifficulty.HasFilter || criteria.StarDifficulty.IsInRange(beatmap.StarRating.FloorToDecimalDigits(2));
+            match &= !criteria.StarDifficulty.HasFilter || criteria.StarDifficulty.IsInRange(starRating.FloorToDecimalDigits(2));
             match &= !criteria.ApproachRate.HasFilter || criteria.ApproachRate.IsInRange(beatmap.Difficulty.ApproachRate);
             match &= !criteria.DrainRate.HasFilter || criteria.DrainRate.IsInRange(beatmap.Difficulty.DrainRate);
             match &= !criteria.CircleSize.HasFilter || criteria.CircleSize.IsInRange(beatmap.Difficulty.CircleSize);
@@ -140,7 +166,7 @@ namespace osu.Game.Screens.Select
                 }
             }
 
-            match &= !criteria.UserStarDifficulty.HasFilter || criteria.UserStarDifficulty.IsInRange(beatmap.StarRating);
+            match &= !criteria.UserStarDifficulty.HasFilter || criteria.UserStarDifficulty.IsInRange(starRating);
 
             if (!match) return false;
 
@@ -155,6 +181,64 @@ namespace osu.Game.Screens.Select
                 match &= criteria.BeatmapSetId == beatmap.BeatmapSet?.OnlineID;
 
             return match;
+        }
+
+        private static bool usesRecalculatedStarsForFiltering(FilterCriteria criteria)
+            => criteria.Sort == SortMode.RecalculatedDifficulty && (criteria.StarDifficulty.HasFilter || criteria.UserStarDifficulty.HasFilter);
+
+        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria)
+        {
+            if (getDifficultyCache == null)
+                return beatmap.StarRating;
+
+            var lookup = new BeatmapDifficultyCache.DifficultyCacheLookup(beatmap, criteria.Ruleset, criteria.Mods);
+
+            Task<StarDifficulty?> task = inFlightDifficultyLookups.GetOrAdd(lookup, l =>
+            {
+                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, CancellationToken.None);
+
+                if (!lookupTask.IsCompleted)
+                {
+                    _ = lookupTask.ContinueWith(t =>
+                    {
+                        inFlightDifficultyLookups.TryRemove(l, out _);
+
+                        if (t.IsCompletedSuccessfully && t.GetResultSafely() != null && matchesCurrentCriteria(l))
+                            requestRefilter?.Invoke();
+                    }, TaskScheduler.Default);
+                }
+
+                return lookupTask;
+            });
+
+            if (!task.IsCompleted)
+                return beatmap.StarRating;
+
+            return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
+        }
+
+        private bool matchesCurrentCriteria(in BeatmapDifficultyCache.DifficultyCacheLookup lookup)
+        {
+            FilterCriteria criteria = getCriteria();
+
+            if (!usesRecalculatedStarsForFiltering(criteria))
+                return false;
+
+            if (!(criteria.Ruleset ?? lookup.BeatmapInfo.Ruleset).Equals(lookup.Ruleset))
+                return false;
+
+            return modsEqual(criteria.Mods, lookup.OrderedMods);
+        }
+
+        private static bool modsEqual(IReadOnlyList<Mod>? criteriaMods, IReadOnlyList<Mod> lookupMods)
+        {
+            if (criteriaMods == null || criteriaMods.Count == 0)
+                return lookupMods.Count == 0;
+
+            if (criteriaMods.Count != lookupMods.Count)
+                return false;
+
+            return lookupMods.SequenceEqual(criteriaMods.OrderBy(m => m.Acronym));
         }
     }
 }
