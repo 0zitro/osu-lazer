@@ -22,6 +22,8 @@ namespace osu.Game.Beatmaps.Drawables
     /// </summary>
     public partial class StarRatingDisplay : CompositeDrawable, IHasCurrentValue<StarDifficulty>
     {
+        private const double max_transform_duration = 750;
+
         private readonly bool animated;
         private readonly Box background;
         private readonly SpriteIcon starIcon;
@@ -147,8 +149,12 @@ namespace osu.Game.Beatmaps.Drawables
             Current.BindValueChanged(c =>
             {
                 if (animated)
+                {
+                    double transformDuration = Math.Min(max_transform_duration, 100 + 80 * Math.Abs(c.NewValue.Stars - c.OldValue.Stars));
+
                     // Animation roughly matches `StarCounter`'s implementation.
-                    this.TransformBindableTo(displayedStars, c.NewValue.Stars, 100 + 80 * Math.Abs(c.NewValue.Stars - c.OldValue.Stars), Easing.OutQuint);
+                    this.TransformBindableTo(displayedStars, c.NewValue.Stars, transformDuration, Easing.OutQuint);
+                }
                 else
                     displayedStars.Value = c.NewValue.Stars;
             });

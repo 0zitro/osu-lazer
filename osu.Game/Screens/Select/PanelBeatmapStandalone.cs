@@ -251,6 +251,7 @@ namespace osu.Game.Screens.Select
             beatmapBackground.Beatmap = null;
             updateButton.BeatmapSet = null;
             localRank.Beatmap = null;
+            starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = null;
             spreadDisplay.Beatmap.Value = null;
 
@@ -265,11 +266,15 @@ namespace osu.Game.Screens.Select
             if (Item == null)
                 return;
 
+            starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, starDifficultyCancellationSource.Token, SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
                 starRatingDisplay.Current.Value = starDifficulty.NewValue;
                 spreadDisplay.StarDifficulty.Value = starDifficulty.NewValue;
+
+                if (!starRatingDisplay.IsPresent)
+                    starRatingDisplay.FinishTransforms(true);
             }, true);
         }
 
