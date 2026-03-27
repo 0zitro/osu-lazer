@@ -46,7 +46,7 @@ namespace osu.Game.Screens.Select
             IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars = null;
 
             if (criteria.Sort == SortMode.RecalculatedDifficulty)
-                recalculatedStars = createRecalculatedStarsMap(items, criteria);
+                recalculatedStars = createRecalculatedStarsMap(items, criteria, cancellationToken);
 
             double getStarRatingForSort(BeatmapInfo beatmap)
                 => recalculatedStars?.GetValueOrDefault(beatmap) ?? beatmap.StarRating;
@@ -185,17 +185,20 @@ namespace osu.Game.Screens.Select
 
             return aMatchedBeatmaps.Max(func).CompareTo(bMatchedBeatmaps.Max(func));
         }
-        private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria)
+        private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria, CancellationToken cancellationToken)
         {
             var starsByBeatmap = new Dictionary<BeatmapInfo, double>();
 
             foreach (BeatmapInfo beatmap in items.Select(i => (BeatmapInfo)i.Model).Distinct())
-                starsByBeatmap[beatmap] = getOrQueueRecalculatedStarRating(beatmap, criteria);
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                starsByBeatmap[beatmap] = getOrQueueRecalculatedStarRating(beatmap, criteria, cancellationToken);
+            }
 
             return starsByBeatmap;
         }
 
-        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria)
+        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria, CancellationToken cancellationToken)
         {
             if (getDifficultyCache == null)
                 return beatmap.StarRating;
@@ -204,7 +207,7 @@ namespace osu.Game.Screens.Select
 
             Task<StarDifficulty?> task = inFlightDifficultyLookups.GetOrAdd(lookup, l =>
             {
-                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, CancellationToken.None);
+                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, cancellationToken);
 
                 if (!lookupTask.IsCompleted)
                 {
@@ -222,6 +225,10 @@ namespace osu.Game.Screens.Select
 
             if (!task.IsCompleted)
                 return beatmap.StarRating;
+
+            // `inFlightDifficultyLookups` should only hold incomplete tasks for de-duplication.
+            // Completed tasks are already handled by `BeatmapDifficultyCache` and should not be retained here.
+            inFlightDifficultyLookups.TryRemove(lookup, out _);
 
             return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
         }

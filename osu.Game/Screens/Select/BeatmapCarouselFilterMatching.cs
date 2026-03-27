@@ -41,21 +41,23 @@ namespace osu.Game.Screens.Select
         {
             var criteria = getCriteria();
 
-            return matchItems(items, criteria).ToList();
+            return matchItems(items, criteria, cancellationToken).ToList();
         }, cancellationToken).ConfigureAwait(false);
 
-        private IEnumerable<CarouselItem> matchItems(IEnumerable<CarouselItem> items, FilterCriteria criteria)
+        private IEnumerable<CarouselItem> matchItems(IEnumerable<CarouselItem> items, FilterCriteria criteria, CancellationToken cancellationToken)
         {
             int countMatching = 0;
 
             foreach (var item in items)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var beatmap = (BeatmapInfo)item.Model;
 
                 if (beatmap.Hidden)
                     continue;
 
-                if (!checkCriteriaMatch(beatmap, criteria))
+                if (!checkCriteriaMatch(beatmap, criteria, cancellationToken))
                     continue;
 
                 countMatching++;
@@ -67,12 +69,12 @@ namespace osu.Game.Screens.Select
 
         public static bool CheckCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria) => checkCriteriaMatch(beatmap, criteria, beatmap.StarRating);
 
-        private bool checkCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria)
+        private bool checkCriteriaMatch(BeatmapInfo beatmap, FilterCriteria criteria, CancellationToken cancellationToken)
         {
             double starRating = beatmap.StarRating;
 
             if (usesRecalculatedStarsForFiltering(criteria))
-                starRating = getOrQueueRecalculatedStarRating(beatmap, criteria);
+            starRating = getOrQueueRecalculatedStarRating(beatmap, criteria, cancellationToken);
 
             return checkCriteriaMatch(beatmap, criteria, starRating);
         }
@@ -186,7 +188,7 @@ namespace osu.Game.Screens.Select
         private static bool usesRecalculatedStarsForFiltering(FilterCriteria criteria)
             => criteria.Sort == SortMode.RecalculatedDifficulty && (criteria.StarDifficulty.HasFilter || criteria.UserStarDifficulty.HasFilter);
 
-        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria)
+        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria, CancellationToken cancellationToken)
         {
             if (getDifficultyCache == null)
                 return beatmap.StarRating;
@@ -195,7 +197,7 @@ namespace osu.Game.Screens.Select
 
             Task<StarDifficulty?> task = inFlightDifficultyLookups.GetOrAdd(lookup, l =>
             {
-                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, CancellationToken.None);
+                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, cancellationToken);
 
                 if (!lookupTask.IsCompleted)
                 {
@@ -213,6 +215,10 @@ namespace osu.Game.Screens.Select
 
             if (!task.IsCompleted)
                 return beatmap.StarRating;
+
+            // `inFlightDifficultyLookups` should only hold incomplete tasks for de-duplication.
+            // Completed tasks are already handled by `BeatmapDifficultyCache` and should not be retained here.
+            inFlightDifficultyLookups.TryRemove(lookup, out _);
 
             return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
         }
