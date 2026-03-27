@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using osu.Framework.Extensions;
 using osu.Game.Beatmaps;
 using osu.Game.Graphics.Carousel;
+using osu.Game.Rulesets;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Screens.Select.Filter;
 using osu.Game.Utils;
@@ -30,6 +31,10 @@ namespace osu.Game.Screens.Select
         /// </summary>
         private readonly ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>> inFlightDifficultyLookups = new ConcurrentDictionary<BeatmapDifficultyCache.DifficultyCacheLookup, Task<StarDifficulty?>>();
 
+        private readonly object difficultyComputationStateLock = new object();
+        private CancellationTokenSource? difficultyComputationCancellationSource;
+        private DifficultyComputationCriteriaSnapshot? difficultyComputationCriteria;
+
         public BeatmapCarouselFilterSorting(Func<FilterCriteria> getCriteria, Func<BeatmapDifficultyCache>? getDifficultyCache = null, Action? requestResort = null)
         {
             this.getCriteria = getCriteria;
@@ -46,7 +51,9 @@ namespace osu.Game.Screens.Select
             IReadOnlyDictionary<BeatmapInfo, double>? recalculatedStars = null;
 
             if (criteria.Sort == SortMode.RecalculatedDifficulty)
-                recalculatedStars = createRecalculatedStarsMap(items, criteria, cancellationToken);
+                recalculatedStars = createRecalculatedStarsMap(items, criteria, cancellationToken, getDifficultyComputationCancellationToken(criteria));
+            else
+                clearDifficultyComputationToken();
 
             double getStarRatingForSort(BeatmapInfo beatmap)
                 => recalculatedStars?.GetValueOrDefault(beatmap) ?? beatmap.StarRating;
@@ -185,20 +192,20 @@ namespace osu.Game.Screens.Select
 
             return aMatchedBeatmaps.Max(func).CompareTo(bMatchedBeatmaps.Max(func));
         }
-        private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria, CancellationToken cancellationToken)
+        private IReadOnlyDictionary<BeatmapInfo, double> createRecalculatedStarsMap(IEnumerable<CarouselItem> items, FilterCriteria criteria, CancellationToken runCancellationToken, CancellationToken difficultyComputationCancellationToken)
         {
             var starsByBeatmap = new Dictionary<BeatmapInfo, double>();
 
             foreach (BeatmapInfo beatmap in items.Select(i => (BeatmapInfo)i.Model).Distinct())
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                starsByBeatmap[beatmap] = getOrQueueRecalculatedStarRating(beatmap, criteria, cancellationToken);
+                runCancellationToken.ThrowIfCancellationRequested();
+                starsByBeatmap[beatmap] = getOrQueueRecalculatedStarRating(beatmap, criteria, difficultyComputationCancellationToken);
             }
 
             return starsByBeatmap;
         }
 
-        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria, CancellationToken cancellationToken)
+        private double getOrQueueRecalculatedStarRating(BeatmapInfo beatmap, FilterCriteria criteria, CancellationToken difficultyComputationCancellationToken)
         {
             if (getDifficultyCache == null)
                 return beatmap.StarRating;
@@ -207,7 +214,7 @@ namespace osu.Game.Screens.Select
 
             Task<StarDifficulty?> task = inFlightDifficultyLookups.GetOrAdd(lookup, l =>
             {
-                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, cancellationToken);
+                Task<StarDifficulty?> lookupTask = getDifficultyCache().GetDifficultyAsync(l.BeatmapInfo, l.Ruleset, l.OrderedMods, difficultyComputationCancellationToken);
 
                 if (!lookupTask.IsCompleted)
                 {
@@ -233,6 +240,36 @@ namespace osu.Game.Screens.Select
             return task.GetResultSafely()?.Stars ?? beatmap.StarRating;
         }
 
+        private CancellationToken getDifficultyComputationCancellationToken(FilterCriteria criteria)
+        {
+            lock (difficultyComputationStateLock)
+            {
+                if (difficultyComputationCriteria == null || !criteriaMatches(difficultyComputationCriteria.Value, criteria))
+                {
+                    difficultyComputationCancellationSource?.Cancel();
+                    difficultyComputationCancellationSource?.Dispose();
+
+                    difficultyComputationCriteria = new DifficultyComputationCriteriaSnapshot(criteria);
+                    difficultyComputationCancellationSource = new CancellationTokenSource();
+                }
+
+                difficultyComputationCancellationSource ??= new CancellationTokenSource();
+
+                return difficultyComputationCancellationSource.Token;
+            }
+        }
+
+        private void clearDifficultyComputationToken()
+        {
+            lock (difficultyComputationStateLock)
+            {
+                difficultyComputationCancellationSource?.Cancel();
+                difficultyComputationCancellationSource?.Dispose();
+                difficultyComputationCancellationSource = null;
+                difficultyComputationCriteria = null;
+            }
+        }
+
         private bool matchesCurrentCriteria(in BeatmapDifficultyCache.DifficultyCacheLookup lookup)
         {
             FilterCriteria criteria = getCriteria();
@@ -240,7 +277,9 @@ namespace osu.Game.Screens.Select
             if (criteria.Sort != SortMode.RecalculatedDifficulty)
                 return false;
 
-            if (!(criteria.Ruleset ?? lookup.BeatmapInfo.Ruleset).Equals(lookup.Ruleset))
+            RulesetInfo? criteriaRuleset = criteria.Ruleset ?? lookup.BeatmapInfo.Ruleset;
+
+            if (criteriaRuleset == null || !criteriaRuleset.Equals(lookup.Ruleset))
                 return false;
 
             return modsEqual(criteria.Mods, lookup.OrderedMods);
@@ -255,6 +294,26 @@ namespace osu.Game.Screens.Select
                 return false;
 
             return lookupMods.SequenceEqual(criteriaMods.OrderBy(m => m.Acronym));
+        }
+
+        private static bool criteriaMatches(in DifficultyComputationCriteriaSnapshot snapshot, FilterCriteria criteria)
+        {
+            if (!EqualityComparer<RulesetInfo?>.Default.Equals(snapshot.Ruleset, criteria.Ruleset))
+                return false;
+
+            return modsEqual(criteria.Mods, snapshot.OrderedMods);
+        }
+
+        private readonly struct DifficultyComputationCriteriaSnapshot
+        {
+            public readonly RulesetInfo? Ruleset;
+            public readonly Mod[] OrderedMods;
+
+            public DifficultyComputationCriteriaSnapshot(FilterCriteria criteria)
+            {
+                Ruleset = criteria.Ruleset;
+                OrderedMods = criteria.Mods?.OrderBy(m => m.Acronym).Select(mod => mod.DeepClone()).ToArray() ?? Array.Empty<Mod>();
+            }
         }
     }
 }
