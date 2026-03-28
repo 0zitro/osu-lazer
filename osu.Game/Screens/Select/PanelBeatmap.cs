@@ -248,8 +248,7 @@ namespace osu.Game.Screens.Select
             starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, computationDelay: SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
 
             // Immediately switch away from the previous panel's stars (if any), even before async updates arrive.
-            starRatingDisplay.Current.Value = starDifficultyBindable.Value;
-            starCounter.Current = (float)starDifficultyBindable.Value.Stars;
+            applyStarRating(starDifficultyBindable.Value, animate: false);
 
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
@@ -259,8 +258,7 @@ namespace osu.Game.Screens.Select
                 if (Item == null || !ReferenceEquals(beatmap, expectedBeatmap))
                     return;
 
-                starRatingDisplay.Current.Value = starDifficulty.NewValue;
-                starCounter.Current = (float)starDifficulty.NewValue.Stars;
+                applyStarRating(starDifficulty.NewValue, animate: Selected.Value || Expanded.Value);
 
                 if (!starRatingDisplay.IsPresent)
                 {
@@ -268,6 +266,18 @@ namespace osu.Game.Screens.Select
                     starCounter.StopAnimation();
                 }
             }, true);
+        }
+
+        private void applyStarRating(StarDifficulty starDifficulty, bool animate)
+        {
+            starRatingDisplay.Current.Value = starDifficulty;
+            starCounter.Current = (float)starDifficulty.Stars;
+
+            if (!animate)
+            {
+                starRatingDisplay.FinishTransforms(true);
+                starCounter.StopAnimation();
+            }
         }
 
         protected override void Update()
