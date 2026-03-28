@@ -246,6 +246,11 @@ namespace osu.Game.Screens.Select
 
             starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, computationDelay: SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
+
+            // Immediately switch away from the previous panel's stars (if any), even before async updates arrive.
+            starRatingDisplay.Current.Value = starDifficultyBindable.Value;
+            starCounter.Current = (float)starDifficultyBindable.Value.Stars;
+
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
                 if (requestVersion != Volatile.Read(ref starDifficultyRequestVersion))

@@ -53,6 +53,7 @@ namespace osu.Game.Screens.Select
 
         private IBindable<StarDifficulty>? starDifficultyBindable;
         private int starDifficultyRequestVersion;
+        private int backgroundRequestVersion;
 
         private PanelSetBackground beatmapBackground = null!;
         private ScheduledDelegate? scheduledBackgroundRetrieval;
@@ -227,7 +228,26 @@ namespace osu.Game.Screens.Select
 
             var beatmapSet = beatmap.BeatmapSet!;
 
-            scheduledBackgroundRetrieval = Scheduler.AddDelayed(b => beatmapBackground.Beatmap = beatmaps.GetWorkingBeatmap(b), beatmap, 50);
+            // `Panel` may reuse this drawable by assigning a new Item without calling `FreeAfterUse()`.
+            // Ensure background retrieval from an older beatmap cannot apply to the newly assigned one.
+            scheduledBackgroundRetrieval?.Cancel();
+
+            int requestVersion = Interlocked.Increment(ref backgroundRequestVersion);
+            var expectedBeatmap = beatmap;
+
+            // Remove previously displayed background immediately to avoid showing a mismatched set image while delayed retrieval is pending.
+            beatmapBackground.Beatmap = null;
+
+            scheduledBackgroundRetrieval = Scheduler.AddDelayed(b =>
+            {
+                if (requestVersion != Volatile.Read(ref backgroundRequestVersion))
+                    return;
+
+                if (Item == null || !ReferenceEquals(beatmap, expectedBeatmap))
+                    return;
+
+                beatmapBackground.Beatmap = beatmaps.GetWorkingBeatmap(b);
+            }, beatmap, 50);
 
             titleText.Text = new RomanisableString(beatmapSet.Metadata.TitleUnicode, beatmapSet.Metadata.Title);
             artistText.Text = new RomanisableString(beatmapSet.Metadata.ArtistUnicode, beatmapSet.Metadata.Artist);
@@ -252,6 +272,7 @@ namespace osu.Game.Screens.Select
 
             scheduledBackgroundRetrieval?.Cancel();
             scheduledBackgroundRetrieval = null;
+            Interlocked.Increment(ref backgroundRequestVersion);
             beatmapBackground.Beatmap = null;
             updateButton.BeatmapSet = null;
             localRank.Beatmap = null;
@@ -271,6 +292,11 @@ namespace osu.Game.Screens.Select
 
             starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, computationDelay: SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
+
+            // Immediately switch away from the previous panel's stars (if any), even before async updates arrive.
+            starRatingDisplay.Current.Value = starDifficultyBindable.Value;
+            spreadDisplay.StarDifficulty.Value = starDifficultyBindable.Value;
+
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
                 if (requestVersion != Volatile.Read(ref starDifficultyRequestVersion))
