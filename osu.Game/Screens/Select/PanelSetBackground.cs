@@ -159,8 +159,11 @@ namespace osu.Game.Screens.Select
             }
 
             loadCancellation = new CancellationTokenSource();
+            var expectedWorking = working;
+            var expectedBackgroundHash = getBackgroundFileHash(working);
+            var expectedCancellation = loadCancellation;
 
-            LoadComponentAsync(new PanelBeatmapBackground(working)
+            LoadComponentAsync(new PanelBeatmapBackground(expectedWorking)
             {
                 RelativeSizeAxes = Axes.Both,
                 Anchor = Anchor.Centre,
@@ -168,6 +171,18 @@ namespace osu.Game.Screens.Select
                 FillMode = FillMode.Fill,
             }, s =>
             {
+                if (expectedCancellation.IsCancellationRequested || loadCancellation != expectedCancellation)
+                {
+                    s.Expire();
+                    return;
+                }
+
+                if (!ReferenceEquals(working, expectedWorking) || expectedBackgroundHash != getBackgroundFileHash(working))
+                {
+                    s.Expire();
+                    return;
+                }
+
                 AddInternal(sprite = s);
                 bool spriteOnScreen = beatmapCarousel?.ScreenSpaceDrawQuad.Intersects(sprite.ScreenSpaceDrawQuad) != false;
                 sprite.FadeInFromZero(spriteOnScreen ? 400 : 0, Easing.OutQuint);
