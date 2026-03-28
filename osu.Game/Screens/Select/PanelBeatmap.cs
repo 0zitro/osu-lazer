@@ -65,6 +65,9 @@ namespace osu.Game.Screens.Select
         [Resolved]
         private ISongSelect? songSelect { get; set; }
 
+        [Resolved]
+        private OsuColour colours { get; set; } = null!;
+
         private BeatmapInfo beatmap => ((GroupedBeatmap)Item!.Model).Beatmap;
 
         public PanelBeatmap()
@@ -196,6 +199,7 @@ namespace osu.Game.Screens.Select
 
             ruleset.BindValueChanged(_ => updateKeyCount());
             mods.BindValueChanged(_ => updateKeyCount(), true);
+            starRatingDisplay.DisplayedStars.BindValueChanged(_ => updateDifficultyColours(), true);
         }
 
         protected override void PrepareForUse()
@@ -269,8 +273,13 @@ namespace osu.Game.Screens.Select
             // Dirty hack to make sure we don't take up spacing in parent fill flow when not displaying a rank.
             // I can't find a better way to do this.
             mainFill.Margin = new MarginPadding { Left = 1 / starRatingDisplay.Scale.X * (localRank.HasRank ? 0 : -3) };
+        }
 
-            var diffColour = starRatingDisplay.DisplayedDifficultyColour;
+        private void updateDifficultyColours()
+        {
+            double displayedStars = starRatingDisplay.DisplayedStars.Value;
+            var diffColour = colours.ForStarDifficulty(displayedStars);
+            var diffTextColour = colours.ForStarDifficultyText(displayedStars);
 
             if (AccentColour != diffColour)
             {
@@ -283,9 +292,9 @@ namespace osu.Game.Screens.Select
                 triangles.Colour = ColourInfo.GradientVertical(diffColour.Opacity(0.25f), diffColour.Opacity(0f));
             }
 
-            if (difficultyIcon.Colour != starRatingDisplay.DisplayedDifficultyTextColour)
+            if (difficultyIcon.Colour != diffTextColour)
             {
-                difficultyIcon.Colour = starRatingDisplay.DisplayedDifficultyTextColour;
+                difficultyIcon.Colour = diffTextColour;
             }
         }
 
