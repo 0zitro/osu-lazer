@@ -228,6 +228,9 @@ namespace osu.Game.Screens.Select
 
             var beatmapSet = beatmap.BeatmapSet!;
 
+            string? currentBackgroundHash = getBackgroundHash(beatmapBackground.Beatmap);
+            string? nextBackgroundHash = getBackgroundHash(beatmap);
+
             // `Panel` may reuse this drawable by assigning a new Item without calling `FreeAfterUse()`.
             // Ensure background retrieval from an older beatmap cannot apply to the newly assigned one.
             scheduledBackgroundRetrieval?.Cancel();
@@ -235,8 +238,10 @@ namespace osu.Game.Screens.Select
             int requestVersion = Interlocked.Increment(ref backgroundRequestVersion);
             var expectedBeatmap = beatmap;
 
-            // Remove previously displayed background immediately to avoid showing a mismatched set image while delayed retrieval is pending.
-            beatmapBackground.Beatmap = null;
+            // Remove previously displayed background only if the new beatmap uses a different background.
+            // This avoids flicker when panels are refreshed but point at the same underlying background.
+            if (currentBackgroundHash != null && currentBackgroundHash != nextBackgroundHash)
+                beatmapBackground.Beatmap = null;
 
             scheduledBackgroundRetrieval = Scheduler.AddDelayed(b =>
             {
@@ -310,6 +315,12 @@ namespace osu.Game.Screens.Select
                     starRatingDisplay.FinishTransforms(true);
             }, true);
         }
+
+        private static string? getBackgroundHash(BeatmapInfo? beatmapInfo)
+            => beatmapInfo?.BeatmapSet?.GetFile(beatmapInfo.Metadata.BackgroundFile)?.File.Hash;
+
+        private static string? getBackgroundHash(WorkingBeatmap? working)
+            => working?.BeatmapSetInfo.GetFile(working.Metadata.BackgroundFile)?.File.Hash;
 
         private void applyStarRating(StarDifficulty starDifficulty, bool animate)
         {
