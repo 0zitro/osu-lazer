@@ -43,7 +43,7 @@ namespace osu.Game.Screens.Select
         private FillFlowContainer mainFill = null!;
 
         private IBindable<StarDifficulty>? starDifficultyBindable;
-        private CancellationTokenSource? starDifficultyCancellationSource;
+        private int starDifficultyRequestVersion;
 
         private Box backgroundBorder = null!;
         private Box backgroundDifficultyTint = null!;
@@ -231,26 +231,26 @@ namespace osu.Game.Screens.Select
             base.FreeAfterUse();
 
             localRank.Beatmap = null;
+            Interlocked.Increment(ref starDifficultyRequestVersion);
             starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = null;
-
-            starDifficultyCancellationSource?.Cancel();
         }
 
         private void computeStarRating()
         {
-            starDifficultyCancellationSource?.Cancel();
-            starDifficultyCancellationSource = new CancellationTokenSource();
-
             if (Item == null)
                 return;
 
             var expectedBeatmap = beatmap;
+            int requestVersion = Interlocked.Increment(ref starDifficultyRequestVersion);
 
             starDifficultyBindable?.UnbindAll();
-            starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, starDifficultyCancellationSource.Token, SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
+            starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, computationDelay: SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
+                if (requestVersion != Volatile.Read(ref starDifficultyRequestVersion))
+                    return;
+
                 if (Item == null || !ReferenceEquals(beatmap, expectedBeatmap))
                     return;
 
@@ -268,14 +268,6 @@ namespace osu.Game.Screens.Select
         protected override void Update()
         {
             base.Update();
-
-            if (Item?.IsVisible != true)
-            {
-                starDifficultyCancellationSource?.Cancel();
-                starDifficultyCancellationSource = null;
-            }
-            else if (starDifficultyCancellationSource == null)
-                computeStarRating();
 
             // Dirty hack to make sure we don't take up spacing in parent fill flow when not displaying a rank.
             // I can't find a better way to do this.
