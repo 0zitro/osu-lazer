@@ -270,10 +270,15 @@ namespace osu.Game.Screens.Select
             if (Item == null)
                 return;
 
+            var expectedBeatmap = beatmap;
+
             starDifficultyBindable?.UnbindAll();
             starDifficultyBindable = difficultyCache.GetBindableDifficulty(beatmap, starDifficultyCancellationSource.Token, SongSelect.DIFFICULTY_CALCULATION_DEBOUNCE);
             starDifficultyBindable.BindValueChanged(starDifficulty =>
             {
+                if (Item == null || !ReferenceEquals(beatmap, expectedBeatmap))
+                    return;
+
                 starRatingDisplay.Current.Value = starDifficulty.NewValue;
                 spreadDisplay.StarDifficulty.Value = starDifficulty.NewValue;
 
@@ -291,6 +296,8 @@ namespace osu.Game.Screens.Select
                 starDifficultyCancellationSource?.Cancel();
                 starDifficultyCancellationSource = null;
             }
+            else if (starDifficultyCancellationSource == null)
+                computeStarRating();
 
             // Dirty hack to make sure we don't take up spacing in parent fill flow when not displaying a rank.
             // I can't find a better way to do this.

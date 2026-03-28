@@ -266,6 +266,15 @@ namespace osu.Game.Beatmaps
         /// <param name="computationDelay">In the case a cached lookup was not possible, a value in milliseconds of to wait until performing potentially intensive lookup.</param>
         private void updateBindable(BindableStarDifficulty bindable, IRulesetInfo? rulesetInfo, IEnumerable<Mod>? mods, CancellationToken cancellationToken = default, int computationDelay = 0)
         {
+            int updateVersion = bindable.BeginUpdate();
+
+            // If we already have a cached value for the requested criteria, seed it immediately.
+            // This avoids exposing stale values while waiting for async callbacks to resolve.
+            StarDifficulty? cachedDifficulty = getCachedDifficulty(bindable.BeatmapInfo, rulesetInfo, mods);
+
+            if (cachedDifficulty != null)
+                bindable.Value = cachedDifficulty.Value;
+
             // GetDifficultyAsync will fall back to existing data from IBeatmapInfo if not locally available
             // (contrary to GetAsync)
             GetDifficultyAsync(bindable.BeatmapInfo, rulesetInfo, mods, cancellationToken, computationDelay)
@@ -275,6 +284,9 @@ namespace osu.Game.Beatmaps
                     Schedule(() =>
                     {
                         if (cancellationToken.IsCancellationRequested)
+                            return;
+
+                        if (!bindable.IsCurrentUpdate(updateVersion))
                             return;
 
                         StarDifficulty? starDifficulty = task.GetResultSafely();
@@ -402,11 +414,17 @@ namespace osu.Game.Beatmaps
             public IBeatmapInfo BeatmapInfo;
             public readonly CancellationToken CancellationToken;
 
+            private int updateVersion;
+
             public BindableStarDifficulty(IBeatmapInfo beatmapInfo, CancellationToken cancellationToken)
             {
                 BeatmapInfo = beatmapInfo;
                 CancellationToken = cancellationToken;
             }
+
+            public int BeginUpdate() => Interlocked.Increment(ref updateVersion);
+
+            public bool IsCurrentUpdate(int version) => Volatile.Read(ref updateVersion) == version;
         }
 
         /// <summary>
